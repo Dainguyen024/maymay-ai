@@ -25,4 +25,6 @@ Không đưa API key vào mã nguồn hoặc GitHub. Trong Render, thêm các gi
   tự phát câu trả lời bằng giọng Fish Audio.
 - Mọi câu trước khi đọc đều được làm sạch teen-code và sửa các cụm Fish dễ đọc sai
   trong `lib/speech.ts`. Muốn bổ sung từ đọc sai, thêm vào `PHRASE_REPLACEMENTS`.
+- Fish TTS dùng tốc độ chậm nhẹ, độ biến thiên thấp, Unicode NFC và câu ngắn để hạn
+  chế trôi thanh tiếng Việt. Cả nút loa và voice 1-1 đều dùng cùng cấu hình này.
 - Lịch sử chat cũ bị lỗi UTF-8 sẽ được sửa tự động khi mở lại trang.

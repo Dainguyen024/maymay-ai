@@ -43,11 +43,15 @@ function token(pattern: string) {
   return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${pattern})(?![\\p{L}\\p{N}_])`, "giu");
 }
 
+function tokenExact(pattern: string) {
+  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:${pattern})(?![\\p{L}\\p{N}_])`, "gu");
+}
+
 const PHRASE_REPLACEMENTS: Array<[RegExp, string]> = [
   // Fish thường đọc sai dấu của cụm này; đổi cách nói nhưng giữ nguyên ý.
   [token("từ\\s+từ"), "chậm thôi"],
   [token("ừm"), "ừ"],
-  [token("ko|kh|k|hông|hong"), "không"],
+  [token("ko|kh|k|hông|hong|khum"), "không"],
   [token("đc|dc"), "được"],
   [token("bth"), "bình thường"],
   [token("bâyh|bh"), "bây giờ"],
@@ -58,10 +62,18 @@ const PHRASE_REPLACEMENTS: Array<[RegExp, string]> = [
   [token("j"), "gì"],
   [token("t"), "mình"],
   [token("m"), "cậu"],
+  [token("thui"), "thôi"],
+  [token("nhaa+|nhaaa+"), "nha"],
+  [token("nhó|nhóe"), "nhé"],
+  [token("oke|oki|ok"), "ô kê"],
+  [token("hello|helo"), "hê lô"],
+  [tokenExact("AI"), "ây ai"],
+  [token("Gen\\s*Z"), "gen di"],
+  [token("TikTok"), "tích tóc"],
 ];
 
 function stripForSpeech(value: string) {
-  return repairMojibake(value)
+  return repairMojibake(value).normalize("NFC")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/https?:\/\/\S+/gi, " ")
@@ -82,8 +94,12 @@ export function normalizeVietnameseSpeech(input: string) {
   speech = speech
     .replace(/\.{4,}/g, "...")
     .replace(/([!?]){2,}/g, "$1")
+    .replace(/\s*;\s*/g, ". ")
+    .replace(/\s*:\s*/g, ", ")
     .replace(/\s+([,.!?])/g, "$1")
     .replace(/([,.!?])(?=[^\s])/g, "$1 ")
+    // Câu quá dài làm giọng dễ trôi thanh; tạo một nhịp nghỉ tự nhiên.
+    .replace(/([^.!?]{70,}?),\s+/g, "$1. ")
     .replace(/\s+/g, " ")
     .trim();
 

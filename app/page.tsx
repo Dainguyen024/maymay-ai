@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AudioLines, Mic, MicOff, MoreHorizontal, Send, Sparkles, Square, Volume2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { repairMojibake } from "@/lib/speech";
 
 type SpeechEmotion = "comfort" | "happy" | "serious" | "playful";
 type Message = {
@@ -71,7 +72,14 @@ export default function Home() {
 
   useEffect(() => {
     const saved = localStorage.getItem("may-chat");
-    if (saved) try { setMessages(JSON.parse(saved)); } catch {}
+    if (saved) try {
+      const parsed = JSON.parse(saved) as Message[];
+      setMessages(parsed.map(message => ({
+        ...message,
+        text: repairMojibake(message.text),
+        speechText: message.speechText ? repairMojibake(message.speechText) : undefined,
+      })));
+    } catch {}
   }, []);
   useEffect(() => {
     localStorage.setItem("may-chat", JSON.stringify(messages));
@@ -155,12 +163,12 @@ export default function Home() {
         body: JSON.stringify({ messages: next.map(({ role, text: value }) => ({ role, text: value })), mood }),
       });
       const data = await response.json() as { text?: string; speechText?: string; emotion?: SpeechEmotion; error?: string };
-      if (!response.ok || !data.text) throw new Error(data.error || "Mây Mây đang lag xíu rồi 😭");
+      if (!response.ok || !data.text) throw new Error(repairMojibake(data.error || "Mây Mây đang lag xíu rồi 😭"));
       const aiMessage: Message = {
         id: Date.now() + 1,
         role: "ai",
-        text: data.text,
-        speechText: data.speechText,
+        text: repairMojibake(data.text),
+        speechText: data.speechText ? repairMojibake(data.speechText) : undefined,
         emotion: data.emotion || "comfort",
         time: "vừa xong",
       };

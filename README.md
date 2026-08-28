@@ -10,6 +10,7 @@
 - Environment variables:
   - `GEMINI_API_KEY`: khóa Gemini
   - `GEMINI_MODEL`: mặc định `gemini-3.5-flash`
+  - `GEMINI_FALLBACK_MODELS`: tùy chọn, mặc định thử `gemini-3.5-flash-lite,gemini-3.1-flash-lite` khi model chính trả 429/503
   - `FISH_AUDIO_API_KEY`: khóa API Fish Audio
   - `FISH_AUDIO_VOICE_ID`: ID giọng trong URL `fish.audio/m/<ID>`
   - `FISH_AUDIO_MODEL`: mặc định `s2.1-pro-free`
@@ -24,3 +25,4 @@ Không đưa API key vào mã nguồn hoặc GitHub. Trong Render, thêm các gi
   tự phát câu trả lời bằng giọng Fish Audio.
 - Mọi câu trước khi đọc đều được làm sạch teen-code và sửa các cụm Fish dễ đọc sai
   trong `lib/speech.ts`. Muốn bổ sung từ đọc sai, thêm vào `PHRASE_REPLACEMENTS`.
+- Lịch sử chat cũ bị lỗi UTF-8 sẽ được sửa tự động khi mở lại trang.

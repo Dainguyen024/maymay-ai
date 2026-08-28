@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { normalizeVietnameseSpeech, speechEmotionFromMood } from "@/lib/speech";
+import { normalizeVietnameseSpeech, repairMojibake, speechEmotionFromMood } from "@/lib/speech";
 
 type IncomingMessage = { role: "ai" | "user"; text: string };
 
@@ -39,28 +39,46 @@ export async function POST(request: Request) {
     const mood = String(body.mood ?? "warm").slice(0, 24);
     contents.push({ role: "user", parts: [{ text: `[Trạng thái cảm xúc mô phỏng hiện tại của Mây Mây: ${mood}. Hãy phản hồi tin nhắn cuối cùng một cách tự nhiên.]` }] });
 
-    const model = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents,
-        generationConfig: { maxOutputTokens: 1024, thinkingConfig: { thinkingLevel: "low" } },
-      }),
+    const configuredFallbacks = (process.env.GEMINI_FALLBACK_MODELS ?? "gemini-3.5-flash-lite,gemini-3.1-flash-lite")
+      .split(",")
+      .map(value => value.trim())
+      .filter(Boolean);
+    const models = [...new Set([process.env.GEMINI_MODEL ?? "gemini-3.5-flash", ...configuredFallbacks])];
+    const requestBody = JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      generationConfig: { maxOutputTokens: 1024, thinkingConfig: { thinkingLevel: "low" } },
     });
 
-    if (!response.ok) {
+    let data: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> } | undefined;
+    let lastStatus = 502;
+    for (const model of models) {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8", "x-goog-api-key": apiKey },
+        body: requestBody,
+      });
+      lastStatus = response.status;
+      if (response.ok) {
+        data = await response.json();
+        break;
+      }
       const detail = await response.text();
-      console.error("Gemini request failed", response.status, detail.slice(0, 400));
-      return NextResponse.json({ error: response.status === 429 ? "Mây Mây đang hết lượt miễn phí, thử lại sau nha." : "Mây Mây đang mất kết nối một chút." }, { status: 502 });
+      console.error("Gemini request failed", model, response.status, detail.slice(0, 400));
+      if (![429, 503].includes(response.status)) break;
     }
-    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> };
-    const text = data.candidates?.[0]?.content?.parts
+
+    if (!data) {
+      return NextResponse.json(
+        { error: lastStatus === 429 ? "Mây Mây đang hết lượt miễn phí, chờ một chút rồi thử lại nha." : "Mây Mây đang mất kết nối một chút." },
+        { status: 502, headers: { "Content-Type": "application/json; charset=utf-8" } },
+      );
+    }
+    const text = repairMojibake(data.candidates?.[0]?.content?.parts
       ?.filter(part => !part.thought)
       .map(part => part.text ?? "")
       .join("")
-      .trim();
+      .trim() ?? "");
     if (!text) return NextResponse.json({ error: "Mây Mây chưa nghĩ ra câu trả lời, thử lại nha." }, { status: 502 });
     const emotion = speechEmotionFromMood(mood);
     return NextResponse.json({ text, speechText: normalizeVietnameseSpeech(text), emotion });

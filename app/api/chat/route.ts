@@ -44,7 +44,7 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents,
-        generationConfig: { maxOutputTokens: 320, thinkingConfig: { thinkingLevel: "low" } },
+        generationConfig: { maxOutputTokens: 1024, thinkingConfig: { thinkingLevel: "low" } },
       }),
     });
 
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
       console.error("Gemini request failed", response.status, detail.slice(0, 400));
       return NextResponse.json({ error: response.status === 429 ? "MÃ¢y MÃ¢y Ä‘ang háº¿t lÆ°á»£t miá»…n phÃ­, thá»­ láº¡i sau nha." : "MÃ¢y MÃ¢y Ä‘ang máº¥t káº¿t ná»‘i má»™t chÃºt." }, { status: 502 });
     }
-    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> };
     const text = data.candidates?.[0]?.content?.parts?.map(part => part.text ?? "").join("").trim();
     if (!text) return NextResponse.json({ error: "MÃ¢y MÃ¢y chÆ°a nghÄ© ra cÃ¢u tráº£ lá»i, thá»­ láº¡i nha." }, { status: 502 });
     return NextResponse.json({ text });
@@ -62,4 +62,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "CÃ³ lá»—i káº¿t ná»‘i, thá»­ láº¡i má»™t chÃºt nha." }, { status: 500 });
   }
 }
+
+
 

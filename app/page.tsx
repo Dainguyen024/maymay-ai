@@ -162,18 +162,49 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: next.map(({ role, text: value }) => ({ role, text: value })), mood }),
       });
-      const data = await response.json() as { text?: string; speechText?: string; emotion?: SpeechEmotion; error?: string };
-      if (!response.ok || !data.text) throw new Error(repairMojibake(data.error || "Mây Mây đang lag xíu rồi 😭"));
-      const aiMessage: Message = {
-        id: Date.now() + 1,
-        role: "ai",
-        text: repairMojibake(data.text),
-        speechText: data.speechText ? repairMojibake(data.speechText) : undefined,
-        emotion: data.emotion || "comfort",
-        time: "vừa xong",
+      const data = await response.json() as {
+        text?: string;
+        segments?: string[];
+        speechText?: string;
+        speechSegments?: string[];
+        emotion?: SpeechEmotion;
+        error?: string;
       };
-      setMessages(old => [...old, aiMessage]);
-      if (voiceMode || fromVoice) void playVoice(aiMessage);
+      if (!response.ok || !data.text) throw new Error(repairMojibake(data.error || "Mây Mây đang lag xíu rồi 😭"));
+      const rawSegments = Array.isArray(data.segments) && data.segments.length
+        ? data.segments.slice(0, 3)
+        : [data.text];
+      const baseId = Date.now() + 1;
+      const aiMessages: Message[] = rawSegments
+        .map((segment, index) => ({
+          id: baseId + index,
+          role: "ai" as const,
+          text: repairMojibake(segment).trim(),
+          speechText: data.speechSegments?.[index]
+            ? repairMojibake(data.speechSegments[index])
+            : undefined,
+          emotion: data.emotion || "comfort",
+          time: "vừa xong",
+        }))
+        .filter(message => message.text);
+
+      for (let index = 0; index < aiMessages.length; index += 1) {
+        if (index > 0) {
+          const humanPause = Math.min(850, 300 + aiMessages[index].text.length * 7);
+          await new Promise(resolve => window.setTimeout(resolve, humanPause));
+        }
+        const message = aiMessages[index];
+        setMessages(old => [...old, message]);
+      }
+
+      if ((voiceMode || fromVoice) && aiMessages.length) {
+        const speakingMessage: Message = {
+          ...aiMessages[aiMessages.length - 1],
+          text: repairMojibake(data.text),
+          speechText: data.speechText ? repairMojibake(data.speechText) : undefined,
+        };
+        void playVoice(speakingMessage);
+      }
     } catch (error) {
       setMessages(old => [...old, {
         id: Date.now() + 1,
@@ -255,8 +286,8 @@ export default function Home() {
     <section className="chat-card">
       <header className="chat-head"><div className="profile"><div className={`avatar avatar-${aiMood}`}><span>m</span><i/></div><div><h1>Mây Mây</h1><p><b/> {moodLabel}</p></div></div><div className="head-actions"><button type="button" className={`voice-toggle ${voiceMode ? "active" : ""}`} onClick={toggleVoiceMode} aria-pressed={voiceMode}><AudioLines size={15}/><span>{voiceMode ? "voice đang bật" : "voice 1-1"}</span></button><Button variant="ghost" size="icon" className="more" aria-label="Tùy chọn"><MoreHorizontal/></Button></div></header>
       <div className="conversation"><div className="day-pill">hôm nay</div><div className="soft-note"><Sparkles size={13}/> không cần nghĩ câu chữ đâu, cứ nói như bình thường á</div>
-        {messages.map((message, index) => <div key={message.id} className={`message-row ${message.role}`}>
-          {message.role === "ai" && <div className="mini-avatar">m</div>}
+        {messages.map((message, index) => <div key={message.id} className={`message-row ${message.role} ${message.role === "ai" && messages[index - 1]?.role === "ai" ? "continuation" : ""}`}>
+          {message.role === "ai" && <div className={`mini-avatar ${messages[index - 1]?.role === "ai" ? "avatar-hidden" : ""}`}>m</div>}
           <div className="message-wrap">{message.role === "ai" && (index === 0 || messages[index - 1]?.role !== "ai") && <span className="sender">Mây Mây</span>}<div className="bubble">{message.text}</div><div className="message-meta"><span>{message.time}</span>{message.role === "ai" && <button onClick={() => void playVoice(message)} aria-label={speakingId === message.id ? "Dừng giọng" : "Nghe tin nhắn"}>{speakingId === message.id ? <Square size={11}/> : <Volume2 size={12}/>}</button>}</div></div>
         </div>)}
         {typing && <div className="message-row ai"><div className="mini-avatar">m</div><div className="typing"><i/><i/><i/></div></div>}<div ref={endRef}/>

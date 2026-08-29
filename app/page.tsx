@@ -124,10 +124,7 @@ export default function Home() {
     setVoiceStatus("");
   }
 
-  async function playVoice(
-  message: Message,
-  onStart?: () => void,
-) {
+  async function playVoice(message: Message) {
     if (speakingId === message.id) {
       stopVoice();
       return;
@@ -146,118 +143,19 @@ export default function Home() {
         throw new Error(data.error || "Mây Mây chưa phát giọng được.");
       }
 
-      const contentType =
-  response.headers.get("content-type")?.split(";")[0] || "audio/mpeg";
-
-if (
-  response.body &&
-  typeof MediaSource !== "undefined" &&
-  MediaSource.isTypeSupported(contentType)
-) {
-  const mediaSource = new MediaSource();
-  const url = URL.createObjectURL(mediaSource);
-  const audio = new Audio(url);
-
-  audio.preload = "auto";
-  audio.playbackRate = 1.0;
-
-  audioRef.current = audio;
-  audioUrlRef.current = url;
-
-  audio.onplay = () => {
-  onStart?.();
-  setVoiceStatus("Mây Mây đang nói...");
-};
-  audio.onended = stopVoice;
-
-  audio.onerror = () => {
-    stopVoice();
-    setVoiceStatus("audio bị lỗi, bấm loa thử lại nha");
-  };
-
-  await new Promise<void>((resolve, reject) => {
-    mediaSource.addEventListener(
-      "sourceopen",
-      async () => {
-        try {
-          const sourceBuffer =
-            mediaSource.addSourceBuffer(contentType);
-
-          const reader = response.body!.getReader();
-          let started = false;
-
-          while (true) {
-            const { done, value } = await reader.read();
-
-            if (done) break;
-            if (!value?.byteLength) continue;
-
-            await new Promise<void>((doneAppend, failAppend) => {
-              const onEnd = () => {
-                sourceBuffer.removeEventListener("error", onError);
-                doneAppend();
-              };
-
-              const onError = () => {
-                sourceBuffer.removeEventListener("updateend", onEnd);
-                failAppend(new Error("Audio stream append failed"));
-              };
-
-              sourceBuffer.addEventListener("updateend", onEnd, {
-                once: true,
-              });
-
-              sourceBuffer.addEventListener("error", onError, {
-                once: true,
-              });
-
-              sourceBuffer.appendBuffer(value);
-            });
-
-            if (!started) {
-              started = true;
-              await audio.play();
-            }
-          }
-
-          if (mediaSource.readyState === "open") {
-            mediaSource.endOfStream();
-          }
-
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      },
-      { once: true },
-    );
-  });
-} else {
-  // Fallback cho browser không hỗ trợ MediaSource MP3
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-
-  audio.preload = "auto";
-  audio.playbackRate = 1.0;
-
-  audioRef.current = audio;
-  audioUrlRef.current = url;
-
-  audio.onplay = () => {
-  onStart?.();
-  setVoiceStatus("Mây Mây đang nói...");
-};
-
-  audio.onended = stopVoice;
-
-  audio.onerror = () => {
-    stopVoice();
-    setVoiceStatus("audio bị lỗi, bấm loa thử lại nha");
-  };
-
-  await audio.play();
-}
+      const url = URL.createObjectURL(await response.blob());
+      const audio = new Audio(url);
+      audio.preload = "auto";
+      audio.playbackRate = .98;
+      audioRef.current = audio;
+      audioUrlRef.current = url;
+      audio.onplay = () => setVoiceStatus("Mây Mây đang nói...");
+      audio.onended = stopVoice;
+      audio.onerror = () => {
+        stopVoice();
+        setVoiceStatus("audio bị lỗi, bấm loa thử lại nha");
+      };
+      await audio.play();
     } catch (error) {
       stopVoice();
       setVoiceStatus(error instanceof Error ? error.message : "Giọng Mây Mây đang lỗi một chút.");
@@ -287,28 +185,16 @@ if (
           state: mayState,
         }),
       });
-     const rawResponse = await response.text();
-
-let data: {
-  text?: string;
-  segments?: string[];
-  speechText?: string;
-  speechSegments?: string[];
-  emotion?: SpeechEmotion;
-  state?: unknown;
-  uiMood?: AiMood;
-  error?: string;
-};
-
-try {
-  data = JSON.parse(rawResponse);
-} catch {
-  throw new Error(
-    response.ok
-      ? "Mây Mây đang lag xíu rồi, thử lại nha."
-      : "Mây Mây đang khởi động lại, chờ vài giây rồi nhắn lại nha.",
-  );
-}
+      const data = await response.json() as {
+        text?: string;
+        segments?: string[];
+        speechText?: string;
+        speechSegments?: string[];
+        emotion?: SpeechEmotion;
+        state?: unknown;
+        uiMood?: AiMood;
+        error?: string;
+      };
       if (!response.ok || !data.text) throw new Error(repairMojibake(data.error || "Mây Mây đang lag xíu rồi 😭"));
 
       if (data.state !== undefined) setMayState(data.state);
@@ -344,32 +230,23 @@ try {
         }))
         .filter(message => message.text);
 
-       for (let index = 0; index < aiMessages.length; index += 1) {
-  if (index > 0) {
-    const humanPause = Math.min(
-      850,
-      300 + aiMessages[index].text.length * 7,
-    );
-    await new Promise(resolve =>
-      window.setTimeout(resolve, humanPause),
-    );
-  }
+      for (let index = 0; index < aiMessages.length; index += 1) {
+        if (index > 0) {
+          const humanPause = Math.min(850, 300 + aiMessages[index].text.length * 7);
+          await new Promise(resolve => window.setTimeout(resolve, humanPause));
+        }
+        const message = aiMessages[index];
+        setMessages(old => [...old, message]);
+      }
 
-  const message = aiMessages[index];
-  setMessages(old => [...old, message]);
-}
-
-if ((voiceMode || fromVoice) && aiMessages.length) {
-  const speakingMessage: Message = {
-    ...aiMessages[aiMessages.length - 1],
-    text: repairMojibake(data.text),
-    speechText: data.speechText
-      ? repairMojibake(data.speechText)
-      : undefined,
-  };
-
-  void playVoice(speakingMessage);
-}
+      if ((voiceMode || fromVoice) && aiMessages.length) {
+        const speakingMessage: Message = {
+          ...aiMessages[aiMessages.length - 1],
+          text: repairMojibake(data.text),
+          speechText: data.speechText ? repairMojibake(data.speechText) : undefined,
+        };
+        void playVoice(speakingMessage);
+      }
     } catch (error) {
       setMessages(old => [...old, {
         id: Date.now() + 1,

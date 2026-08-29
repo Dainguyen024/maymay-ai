@@ -55,7 +55,7 @@ if (!apiKey) {
     },
     body: JSON.stringify({
       text: speechText,
-      model_id: "eleven_multilingual_v2",
+      model_id: "eleven_v3",
       voice_settings: {
         stability: 0.42,
         similarity_boost: 0.85,

@@ -81,7 +81,7 @@ if (!apiKey) {
   console.error("ElevenLabs returned an empty audio stream");
 
   return NextResponse.json(
-    { error: "Mây chưa tạo được giọng lúc này, thử lại chút nha." },
+    { error: "HUHU Mây đang bị mất giọng lúc này, yêu chờ chút ròi thử lại nhe." },
     { status: 502 },
   );
 }

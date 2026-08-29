@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     }
 
     const apiKey = process.env.ELEVENLABS_API_KEY;
-const voiceId = "xeRzNgA5BGMAmllSnOuF";
+const voiceId = "YlfinSFWQzGhbK3PYlDC";
 
 if (!apiKey) {
   return NextResponse.json(

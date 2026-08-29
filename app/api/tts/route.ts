@@ -45,7 +45,7 @@ if (!apiKey) {
       : "comfort";
     const speechText = styleSpeech(text, emotion);
     const response = await fetch(
-  `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
   {
     method: "POST",
     headers: {
@@ -57,11 +57,12 @@ if (!apiKey) {
       text: speechText,
       model_id: "eleven_v3",
       voice_settings: {
-        stability: 0.42,
-        similarity_boost: 0.85,
-        style: 0.25,
-        use_speaker_boost: true,
-      },
+  stability: 0.42,
+  similarity_boost: 0.82,
+  style: 0,
+  use_speaker_boost: false,
+  speed: 1.06,
+},
     }),
     signal: AbortSignal.timeout(45_000),
   }
@@ -76,12 +77,35 @@ if (!apiKey) {
       return NextResponse.json({ error: message }, { status: 502 });
     }
 
-    return new Response(await response.arrayBuffer(), {
-      headers: {
-        "Content-Type": response.headers.get("content-type") ?? "audio/mpeg",
-        "Cache-Control": "private, no-store",
-      },
-    });
+    if (!response.body) {
+  console.error("ElevenLabs returned an empty audio stream");
+
+  return NextResponse.json(
+    { error: "Mây chưa tạo được giọng lúc này, thử lại chút nha." },
+    { status: 502 },
+  );
+}
+
+const contentType =
+  response.headers.get("content-type") ?? "audio/mpeg";
+
+return new Response(response.body, {
+  status: 200,
+  headers: {
+    "Content-Type": contentType,
+
+    // Không cache audio hội thoại
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    Pragma: "no-cache",
+
+    // Hạn chế proxy/server gom cả audio rồi mới gửi
+    "X-Accel-Buffering": "no",
+
+    // Cho browser xử lý như audio phát trực tiếp
+    "Content-Disposition": "inline",
+  },
+});
+    
   } catch (error) {
     console.error("TTS route error", error);
     return NextResponse.json({ error: "Có lỗi tạo giọng, thử lại nha." }, { status: 500 });

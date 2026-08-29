@@ -185,16 +185,28 @@ export default function Home() {
           state: mayState,
         }),
       });
-      const data = await response.json() as {
-        text?: string;
-        segments?: string[];
-        speechText?: string;
-        speechSegments?: string[];
-        emotion?: SpeechEmotion;
-        state?: unknown;
-        uiMood?: AiMood;
-        error?: string;
-      };
+     const rawResponse = await response.text();
+
+let data: {
+  text?: string;
+  segments?: string[];
+  speechText?: string;
+  speechSegments?: string[];
+  emotion?: SpeechEmotion;
+  state?: unknown;
+  uiMood?: AiMood;
+  error?: string;
+};
+
+try {
+  data = JSON.parse(rawResponse);
+} catch {
+  throw new Error(
+    response.ok
+      ? "Mây Mây đang lag xíu rồi, thử lại nha."
+      : "Mây Mây đang khởi động lại, chờ vài giây rồi nhắn lại nha.",
+  );
+}
       if (!response.ok || !data.text) throw new Error(repairMojibake(data.error || "Mây Mây đang lag xíu rồi 😭"));
 
       if (data.state !== undefined) setMayState(data.state);

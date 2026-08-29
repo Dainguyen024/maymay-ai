@@ -61,7 +61,6 @@ export default function Home() {
   const [draft, setDraft] = useState("");
   const [typing, setTyping] = useState(false);
   const [aiMood, setAiMood] = useState<AiMood>("warm");
-  const [mayState, setMayState] = useState<unknown>(null);
   const [voiceMode, setVoiceMode] = useState(false);
   const [listening, setListening] = useState(false);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
@@ -82,14 +81,7 @@ export default function Home() {
       })));
     } catch {}
 
-    const savedState = localStorage.getItem("may-state-v17");
-    if (savedState) {
-      try {
-        setMayState(JSON.parse(savedState) as unknown);
-      } catch {
-        localStorage.removeItem("may-state-v17");
-      }
-    }
+    
   }, []);
   useEffect(() => {
     // Giữ đủ lịch sử gần để trò chuyện có continuity nhưng không làm đầy
@@ -97,11 +89,7 @@ export default function Home() {
     localStorage.setItem("may-chat", JSON.stringify(messages.slice(-160)));
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, typing]);
-  useEffect(() => {
-    if (mayState !== null) {
-      localStorage.setItem("may-state-v17", JSON.stringify(mayState));
-    }
-  }, [mayState]);
+  
   useEffect(() => () => {
     audioRef.current?.pause();
     recognitionRef.current?.abort();
@@ -178,12 +166,9 @@ export default function Home() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: next
-            .slice(-36)
-            .map(({ role, text: value }) => ({ role, text: value })),
-          state: mayState,
-        }),
+       body: JSON.stringify({
+  message: next[next.length - 1]?.text ?? "",
+}),
       });
       const data = await response.json() as {
         text?: string;
@@ -197,7 +182,7 @@ export default function Home() {
       };
       if (!response.ok || !data.text) throw new Error(repairMojibake(data.error || "Mây Mây đang lag xíu rồi 😭"));
 
-      if (data.state !== undefined) setMayState(data.state);
+     
       if (data.uiMood) setAiMood(data.uiMood);
 
       // Nếu model trả quá nhanh, giữ typing indicator đủ để UI không bị giật.

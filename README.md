@@ -9,8 +9,8 @@
 - Start Command: `npm start`
 - Environment variables:
   - `GEMINI_API_KEY`: khóa Gemini
-  - `GEMINI_MODEL`: mặc định `gemini-3.5-flash`
-  - `GEMINI_FALLBACK_MODELS`: tùy chọn, mặc định thử `gemini-3.5-flash-lite,gemini-3.1-flash-lite` khi model chính trả 429/503
+  - `GEMINI_MODEL`: mặc định `gemini-3.7-flash`
+  - `GEMINI_FALLBACK_MODELS`: tùy chọn, mặc định thử `gemini-3.5-flash,gemini-3.5-flash-lite` khi model chính quá tải/lỗi tạm thời
   - `FISH_AUDIO_API_KEY`: khóa API Fish Audio
   - `FISH_AUDIO_VOICE_ID`: ID giọng trong URL `fish.audio/m/<ID>`
   - `FISH_AUDIO_MODEL`: mặc định `s2.1-pro-free`
@@ -28,3 +28,19 @@ Không đưa API key vào mã nguồn hoặc GitHub. Trong Render, thêm các gi
 - Fish TTS dùng tốc độ chậm nhẹ, độ biến thiên thấp, Unicode NFC và câu ngắn để hạn
   chế trôi thanh tiếng Việt. Cả nút loa và voice 1-1 đều dùng cùng cấu hình này.
 - Lịch sử chat cũ bị lỗi UTF-8 sẽ được sửa tự động khi mở lại trang.
+
+## Unified Core v17
+
+- State cảm xúc, gu, facts và lời hứa được validate ở backend rồi lưu trong
+  `localStorage` của chính trình duyệt. Frontend gửi state này lại ở mỗi lượt; không
+  còn lỗi reset state do gửi nhầm trường `mood`.
+- Backend cung cấp ngày giờ thật theo `Asia/Ho_Chi_Minh`; model không được tự đoán.
+- Gemini phải trả JSON theo schema. Output sai schema, JSON bị cắt hoặc response quá
+  lớn không được đẩy thẳng ra giao diện.
+- Request chat/TTS có giới hạn kích thước, rate limit, timeout và model fallback.
+- Tách tối đa ba bong bóng nhưng nếu model dùng thừa separator thì nội dung còn lại
+  được gộp vào bong bóng cuối, không bị mất chữ.
+- Memory hiện bền trên cùng trình duyệt. Muốn đồng bộ nhiều máy và chủ động gửi Web
+  Push khi trang đóng vẫn cần database + scheduler riêng.
+
+Trước khi deploy có thể chạy `npm run check` để typecheck, lint và build liên tiếp.

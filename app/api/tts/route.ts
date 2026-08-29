@@ -1,45 +1,71 @@
 import { NextResponse } from "next/server";
 import { SpeechEmotion, styleSpeech } from "@/lib/speech";
+import { parseBoundedJson, ttsRequestSchema } from "@/lib/maymay-schemas";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const EMOTIONS = new Set<SpeechEmotion>(["comfort", "happy", "serious", "playful"]);
 
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.FISH_AUDIO_API_KEY;
-    const referenceId = process.env.FISH_AUDIO_VOICE_ID;
-    if (!apiKey || !referenceId) {
-      return NextResponse.json({ error: "Giọng Mây Mây chưa được kết nối." }, { status: 503 });
+    const limit = checkRateLimit(request, "tts", 18);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { error: "Giọng Mây đang nhận quá nhiều lượt, chờ một chút nha." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(limit.retryAfter) },
+        },
+      );
     }
 
-    const body = (await request.json()) as { text?: string; emotion?: SpeechEmotion };
-    const text = String(body.text ?? "").trim();
-    if (!text || text.length > 2400) {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+const voiceId = "xeRzNgA5BGMAmllSnOuF";
+
+if (!apiKey) {
+  return NextResponse.json(
+    { error: "Giọng Mây Mây chưa được kết nối." },
+    { status: 503 }
+  );
+}
+
+    const contentLength = Number(request.headers.get("content-length") || 0);
+    if (contentLength > 12_000) {
+      return NextResponse.json({ error: "Câu đọc quá lớn." }, { status: 413 });
+    }
+
+    const parsed = parseBoundedJson(await request.text(), 12_000);
+    const validation = parsed.ok ? ttsRequestSchema.safeParse(parsed.value) : null;
+    if (!validation?.success) {
       return NextResponse.json({ error: "Câu đọc không hợp lệ." }, { status: 400 });
     }
 
-    const emotion = EMOTIONS.has(body.emotion as SpeechEmotion) ? body.emotion as SpeechEmotion : "comfort";
+    const { text } = validation.data;
+    const emotion = EMOTIONS.has(validation.data.emotion as SpeechEmotion)
+      ? (validation.data.emotion as SpeechEmotion)
+      : "comfort";
     const speechText = styleSpeech(text, emotion);
-    const response = await fetch("https://api.fish.audio/v1/tts", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        model: process.env.FISH_AUDIO_MODEL ?? "s2.1-pro-free",
+    const response = await fetch(
+  `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+  {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text: speechText,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: {
+        stability: 0.42,
+        similarity_boost: 0.85,
+        style: 0.25,
+        use_speaker_boost: true,
       },
-      body: JSON.stringify({
-        text: speechText,
-        reference_id: referenceId,
-        format: "mp3",
-        mp3_bitrate: 128,
-        normalize: true,
-        latency: "balanced",
-        chunk_length: 180,
-        prosody: { speed: 0.93, volume: 0 },
-        temperature: 0.35,
-        top_p: 0.6,
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
+    }),
+    signal: AbortSignal.timeout(45_000),
+  }
+);
 
     if (!response.ok) {
       const detail = await response.text();

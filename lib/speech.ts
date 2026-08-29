@@ -78,6 +78,8 @@ function stripForSpeech(value: string) {
     .replace(/`([^`]+)`/g, "$1")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/[*_#>~|]/g, " ")
+    // Emoticon chữ như :)), =)), :D không nên bị đọc thành dấu ngoặc.
+    .replace(/(?<![\p{L}\p{N}_])(?:[:;=xX8][-^']?[)(DPp/\\]+|[)(]{2,})(?![\p{L}\p{N}_])/gu, " ")
     // Bỏ emoji/ký hiệu trang trí nhưng giữ chữ, số và dấu câu tiếng Việt.
     .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, " ")
     .replace(/\s*\n+\s*/g, ". ")
@@ -114,7 +116,7 @@ export function styleSpeech(text: string, emotion: SpeechEmotion = "comfort") {
 
 export function speechEmotionFromMood(mood?: string): SpeechEmotion {
   if (mood === "happy") return "happy";
-  if (mood === "annoyed") return "playful";
+  if (mood === "annoyed") return "serious";
   if (mood === "hurt") return "serious";
   return "comfort";
 }

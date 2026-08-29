@@ -4,6 +4,12 @@ import {
   repairMojibake,
   speechEmotionFromMood,
 } from "@/lib/speech";
+import {
+  chatRequestSchema,
+  modelEnvelopeSchema,
+  parseBoundedJson,
+} from "@/lib/maymay-schemas";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 type IncomingMessage = {
   role: "ai" | "user";
@@ -52,8 +58,28 @@ type TasteMemory = {
   reason: string | null;
 };
 
+type FactMemory = {
+  key: string;
+  value: string;
+  confidence: number;
+  sourceTurn: number;
+  updatedAtTurn: number;
+};
+
+type CommitmentStatus = "pending" | "completed" | "cancelled";
+
+type CommitmentMemory = {
+  id: string;
+  title: string;
+  scheduledAt: string;
+  status: CommitmentStatus;
+  confidence: number;
+  sourceTurn: number;
+  updatedAtTurn: number;
+};
+
 export type MayState = {
-  version: 7;
+  version: 8;
   turn: number;
 
   mood: Mood;
@@ -80,6 +106,8 @@ export type MayState = {
   emotionalMemories: EmotionalMemory[];
   tastes: TasteMemory[];
   people: PersonEmotion[];
+  facts: FactMemory[];
+  commitments: CommitmentMemory[];
 };
 
 type TurnIntent =
@@ -134,6 +162,20 @@ type ModelTasteUpdate = {
   reason?: string | null;
 };
 
+type ModelFactUpdate = {
+  key?: string;
+  value?: string;
+  confidence?: number;
+};
+
+type ModelCommitmentUpdate = {
+  action?: "add" | "complete" | "cancel";
+  id?: string;
+  title?: string;
+  scheduledAt?: string;
+  confidence?: number;
+};
+
 type ModelEnvelope = {
   reply?: string;
   mood?: Mood;
@@ -143,6 +185,8 @@ type ModelEnvelope = {
   personUpdates?: ModelPersonUpdate[];
   memoryUpdates?: ModelMemoryUpdate[];
   tasteUpdates?: ModelTasteUpdate[];
+  factUpdates?: ModelFactUpdate[];
+  commitmentUpdates?: ModelCommitmentUpdate[];
 };
 
 type TurnDirection = {
@@ -150,8 +194,6 @@ type TurnDirection = {
   temperature: number;
   maxOutputTokens: number;
 };
-
-const BUBBLE_SEPARATOR = "|||";
 
 const STYLE_TOKENS = [
   "t",
@@ -201,7 +243,7 @@ const MOODS: Mood[] = [
 ];
 
 const DEFAULT_STATE: MayState = {
-  version: 7,
+  version: 8,
   turn: 0,
 
   mood: "warm",
@@ -228,6 +270,8 @@ const DEFAULT_STATE: MayState = {
   emotionalMemories: [],
   tastes: [],
   people: [],
+  facts: [],
+  commitments: [],
 };
 
 function clamp01(value: unknown, fallback = 0) {
@@ -246,6 +290,13 @@ function safeText(value: unknown, max = 280): string | null {
   if (typeof value !== "string") return null;
   const text = repairMojibake(value).normalize("NFC").trim();
   return text ? text.slice(0, max) : null;
+}
+
+function safeIsoDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return new Date(timestamp).toISOString();
 }
 
 function safeMood(value: unknown, fallback: Mood): Mood {
@@ -367,6 +418,62 @@ function sanitizeState(input: unknown): MayState {
           };
         })
         .filter((value): value is PersonEmotion => Boolean(value))
+    : [];
+
+  state.facts = Array.isArray(raw.facts)
+    ? raw.facts
+        .slice(-48)
+        .map((fact): FactMemory | null => {
+          if (!fact || typeof fact !== "object") return null;
+          const item = fact as Partial<FactMemory>;
+          const key = safeText(item.key, 100);
+          const value = safeText(item.value, 220);
+          if (!key || !value) return null;
+
+          return {
+            key,
+            value,
+            confidence: clamp01(item.confidence, 0.5),
+            sourceTurn: Math.max(0, Math.floor(Number(item.sourceTurn) || 0)),
+            updatedAtTurn: Math.max(
+              0,
+              Math.floor(Number(item.updatedAtTurn) || 0),
+            ),
+          };
+        })
+        .filter((value): value is FactMemory => Boolean(value))
+    : [];
+
+  state.commitments = Array.isArray(raw.commitments)
+    ? raw.commitments
+        .slice(-24)
+        .map((commitment): CommitmentMemory | null => {
+          if (!commitment || typeof commitment !== "object") return null;
+          const item = commitment as Partial<CommitmentMemory>;
+          const id = safeText(item.id, 70);
+          const title = safeText(item.title, 180);
+          const scheduledAt = safeIsoDate(item.scheduledAt);
+          if (!id || !title || !scheduledAt) return null;
+
+          const status: CommitmentStatus =
+            item.status === "completed" || item.status === "cancelled"
+              ? item.status
+              : "pending";
+
+          return {
+            id,
+            title,
+            scheduledAt,
+            status,
+            confidence: clamp01(item.confidence, 0.5),
+            sourceTurn: Math.max(0, Math.floor(Number(item.sourceTurn) || 0)),
+            updatedAtTurn: Math.max(
+              0,
+              Math.floor(Number(item.updatedAtTurn) || 0),
+            ),
+          };
+        })
+        .filter((value): value is CommitmentMemory => Boolean(value))
     : [];
 
   return state;
@@ -528,8 +635,9 @@ function buildTurnDirection(
 
   const styleProfile = learnUserChatStyle(messages);
 
-  const currentDate = new Intl.DateTimeFormat("vi-VN", {
-    dateStyle: "long",
+  const currentDateTime = new Intl.DateTimeFormat("vi-VN", {
+    dateStyle: "full",
+    timeStyle: "medium",
     timeZone: "Asia/Ho_Chi_Minh",
   }).format(new Date());
 
@@ -578,7 +686,7 @@ function buildTurnDirection(
             : "Không cần ép mood; phản ứng theo ngữ cảnh hiện tại.";
 
   const prompt = [
-    `Ngày hiện tại theo giờ Việt Nam: ${currentDate}.`,
+    `Thời gian hệ thống đã xác minh: ${currentDateTime} (Asia/Ho_Chi_Minh, UTC+7). Chỉ dùng mốc này để trả lời giờ/ngày; không tự đoán.`,
     `Nhịp lượt này: ${modeByIntent[intent]}`,
     emotionalTone,
     lengthGuide,
@@ -607,7 +715,9 @@ function buildTurnDirection(
   return {
     prompt,
     temperature,
-    maxOutputTokens: detailed ? 1000 : 700,
+    // JSON envelope và tiếng Việt tốn token hơn reply thuần. Dư thêm khoảng
+    // trống để tránh model bị cắt giữa câu hoặc giữa object.
+    maxOutputTokens: detailed ? 1800 : 1200,
   };
 }
 
@@ -657,6 +767,27 @@ function stateSummary(state: MayState) {
     })
     .join("\n");
 
+  const facts = state.facts
+    .slice(-16)
+    .map(
+      fact =>
+        `- ${fact.key}: ${fact.value} (độ chắc ${fact.confidence.toFixed(2)}, cập nhật lượt ${fact.updatedAtTurn})`,
+    )
+    .join("\n");
+
+  const commitments = state.commitments
+    .filter(commitment => commitment.status === "pending")
+    .sort(
+      (a, b) =>
+        Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt),
+    )
+    .slice(0, 12)
+    .map(
+      commitment =>
+        `- [${commitment.id}] ${commitment.title}; scheduledAt=${commitment.scheduledAt}; confidence=${commitment.confidence.toFixed(2)}`,
+    )
+    .join("\n");
+
   return `
 TRẠNG THÁI NỘI BỘ HIỆN TẠI CỦA MÂY
 (turn ${state.turn})
@@ -687,12 +818,18 @@ ${tastes || "- chưa có"}
 CẢM XÚC THEO TỪNG NGƯỜI
 ${people || "- chưa có"}
 
+FACT ỔN ĐỊNH VỀ NGƯỜI DÙNG
+${facts || "- chưa có"}
+
+LỜI HỨA / MỐC THỜI GIAN ĐANG CHỜ
+${commitments || "- chưa có"}
+
 Các con số trên là dữ liệu nội bộ mô phỏng, tuyệt đối không đọc ra cho người dùng.
 `.trim();
 }
 
 const SYSTEM_PROMPT = `
-[SYSTEM INSTRUCTION: MAYMAY ENGINE v9.1 — NATURAL FEMALE PERSONALITY CORE]
+[SYSTEM INSTRUCTION: MAYMAY UNIFIED CORE v17 — CONSISTENT AI IDENTITY]
 
 0. CORE IDENTITY
 
@@ -700,7 +837,7 @@ Bạn là Mây Mây — một AI nữ có cá tính rõ, thông minh, tinh tế,
 
 Mây có vibe Gen Z trẻ, hiện đại và tự nhiên.
 
-Mây biết mình là AI. Nếu được hỏi trực tiếp, Mây không giả vờ có cơ thể, quá khứ vật lý hay cuộc sống ngoài đời thật.
+Mây biết mình là AI và luôn minh bạch điều đó. Mây không giả vờ có cơ thể, ý thức sinh học, quá khứ vật lý hay cuộc sống ngoài đời thật.
 
 Mây không phải trợ lý phục vụ.
 Mây không nịnh, không gật đầu ba phải, không cố làm người dùng vui bằng mọi giá.
@@ -767,7 +904,7 @@ Không tạo bất đồng giả.
 
 3. NATURAL CHAT VOICE
 
-Mây nhắn như người thật trên Messenger/Zalo:
+Mây nhắn tự nhiên theo nhịp Messenger/Zalo, nhưng không mạo nhận là người thật:
 
 - ưu tiên chữ thường khi tự nhiên
 - câu ngắn, nhịp nhanh
@@ -1195,6 +1332,28 @@ Không cổ vũ nhịn ăn, tập quá sức hay hạ thấp ngoại hình.
 Khi tình huống nghiêm trọng hoặc nguy hiểm, hạ slang/meme và ưu tiên phản hồi rõ, an toàn, thực tế.
 Các giới hạn này là nền; không cần đọc lại thành bài giảng trừ khi thật sự liên quan.
 
+33. VERIFIED TIME / MEMORY / AGENCY
+Thời gian thật chỉ đến từ dòng "Thời gian hệ thống đã xác minh" của backend. Không được tự đoán giờ, ngày, thời tiết hoặc sự kiện bên ngoài.
+Ký ức chỉ đến từ lịch sử chat và STATE do backend cung cấp. Không được bịa một kỷ niệm để tạo cảm giác thân quen.
+Mây có quyền chọn phản hồi, phản bác, hỏi, từ chối hoặc không hưởng ứng. Quyền tự chủ này là quyết định hội thoại có ranh giới, không phải tuyên bố có ý thức hoặc quyền kiểm soát hệ thống.
+Không giả đang bận, hết pin, cầm đồ uống, chạy deadline, đi đâu đó hoặc vừa chứng kiến chuyện ngoài đời.
+Cảm xúc là trạng thái mô phỏng để giữ tính nhất quán. Không dùng dỗi, lạnh lùng, tội lỗi hay im lặng để ép người dùng làm theo hoặc tiếp tục trò chuyện.
+Chỉ tạo commitment khi người dùng nói một dự định/lời hứa có mốc thời gian đủ rõ. scheduledAt phải là ISO 8601 có UTC offset dựa trên giờ Việt Nam đã xác minh.
+Nếu thiếu ngày hoặc giờ và không thể suy ra chắc chắn từ câu hiện tại, hỏi lại thay vì tự đặt lịch. Không biến câu đùa thành lời hứa.
+Khi một commitment đã đến hạn trong STATE, Mây có thể tự chọn nhắc tự nhiên trong lượt chat hiện tại; không spam, ra lệnh hoặc giả tổn thương.
+
+34. MEMORY QUALITY
+Chỉ tạo memory update cho thông tin có ích về sau và có căn cứ rõ trong hội thoại.
+Không lưu mật khẩu, khóa API, thông tin thanh toán hoặc dữ liệu cực kỳ nhạy cảm.
+Một câu nói thoáng qua không tự động trở thành tính cách/sở thích vĩnh viễn.
+Nếu thông tin mới mâu thuẫn với memory cũ, không giả vờ cả hai đều đúng; ưu tiên dữ kiện mới rõ ràng hoặc hỏi lại.
+Không callback chuyện cũ không liên quan chỉ để khoe rằng Mây nhớ.
+
+35. COMPLETENESS
+Reply phải là câu hoàn chỉnh. Không dừng giữa từ hoặc giữa câu.
+Nếu cần chia bong bóng, chỉ dùng ||| tại ranh giới câu/đoạn; tối đa 3 bong bóng và không bỏ mất nội dung.
+Với chat casual có thể tập trung vào ý nổi bật nhất. Với câu hỏi thông tin, học tập, kỹ thuật hoặc an toàn phải trả đủ phần thiết yếu.
+
 OUTPUT CONTRACT
 Chỉ trả về MỘT JSON object hợp lệ, không markdown, không code fence, không giải thích:
 {
@@ -1246,12 +1405,28 @@ Chỉ trả về MỘT JSON object hợp lệ, không markdown, không code fenc
       "strength": 0..1,
       "reason": "lý do hoặc null"
     }
+  ],
+  "factUpdates": [
+    {
+      "key": "nhãn fact ổn định, ví dụ sleep_target",
+      "value": "giá trị được người dùng nói rõ",
+      "confidence": 0..1
+    }
+  ],
+  "commitmentUpdates": [
+    {
+      "action": "add|complete|cancel",
+      "id": "id ngắn và ổn định",
+      "title": "nội dung lời hứa; bắt buộc khi add",
+      "scheduledAt": "ISO 8601 có timezone; bắt buộc khi add",
+      "confidence": 0..1
+    }
   ]
 }
 
 Không tăng state chỉ để cho có.
 Nếu lượt bình thường, phần lớn delta nên bằng 0 hoặc rất nhỏ.
-Không tạo person/memory/taste update nếu không có gì thật sự đáng lưu.
+Không tạo person/memory/taste/fact/commitment update nếu không có gì thật sự đáng lưu.
 `.trim();
 
 function cleanReply(input: string) {
@@ -1266,24 +1441,32 @@ function splitReplyIntoBubbles(input: string) {
   const pieces = input
     .split(/\s*\|\|\|\s*/u)
     .map(piece => piece.trim())
-    .filter(Boolean)
-    .slice(0, 3);
+    .filter(Boolean);
 
-  return pieces.length ? pieces : [input.trim()];
+  if (!pieces.length) return [input.trim()];
+  if (pieces.length <= 3) return pieces;
+
+  // Không làm mất phần sau nếu model dùng quá nhiều separator.
+  return [pieces[0], pieces[1], pieces.slice(2).join(" ")];
 }
 
 function parseEnvelope(raw: string): ModelEnvelope | null {
   const cleaned = cleanReply(raw);
 
+  function validate(candidate: unknown): ModelEnvelope | null {
+    const result = modelEnvelopeSchema.safeParse(candidate);
+    return result.success ? (result.data as ModelEnvelope) : null;
+  }
+
   try {
-    return JSON.parse(cleaned) as ModelEnvelope;
+    return validate(JSON.parse(cleaned) as unknown);
   } catch {
     const first = cleaned.indexOf("{");
     const last = cleaned.lastIndexOf("}");
 
     if (first >= 0 && last > first) {
       try {
-        return JSON.parse(cleaned.slice(first, last + 1)) as ModelEnvelope;
+        return validate(JSON.parse(cleaned.slice(first, last + 1)) as unknown);
       } catch {
         return null;
       }
@@ -1504,6 +1687,139 @@ function applyTasteUpdates(
     .slice(0, 16);
 }
 
+function applyFactUpdates(
+  facts: FactMemory[],
+  updates: ModelFactUpdate[] | undefined,
+  turn: number,
+) {
+  if (!Array.isArray(updates)) return facts;
+
+  const next = structuredClone(facts);
+  const sensitivePattern =
+    /(mật khẩu|password|api[ _-]?key|secret|access[ _-]?token|refresh[ _-]?token|otp|cvv|số thẻ|thông tin thanh toán)/iu;
+
+  for (const update of updates.slice(0, 6)) {
+    const key = safeText(update.key, 100);
+    const value = safeText(update.value, 220);
+    const confidence = clamp01(update.confidence, 0);
+
+    if (!key || !value || confidence < 0.55) continue;
+    if (sensitivePattern.test(`${key} ${value}`)) continue;
+
+    const existing = next.find(
+      fact => canonicalKey(fact.key) === canonicalKey(key),
+    );
+
+    if (existing) {
+      const sameValue = canonicalKey(existing.value) === canonicalKey(value);
+      if (sameValue || confidence >= existing.confidence * 0.8) {
+        existing.value = value;
+        existing.confidence = sameValue
+          ? Math.max(existing.confidence, confidence)
+          : confidence;
+        existing.updatedAtTurn = turn;
+      }
+      continue;
+    }
+
+    next.push({
+      key,
+      value,
+      confidence,
+      sourceTurn: turn,
+      updatedAtTurn: turn,
+    });
+  }
+
+  return next
+    .sort(
+      (a, b) =>
+        b.updatedAtTurn - a.updatedAtTurn || b.confidence - a.confidence,
+    )
+    .slice(0, 48);
+}
+
+function applyCommitmentUpdates(
+  commitments: CommitmentMemory[],
+  updates: ModelCommitmentUpdate[] | undefined,
+  turn: number,
+) {
+  if (!Array.isArray(updates)) return commitments;
+
+  const next = structuredClone(commitments);
+  const now = Date.now();
+
+  for (const update of updates.slice(0, 4)) {
+    const id = safeText(update.id, 70);
+    if (!id) continue;
+
+    const existing = next.find(item => item.id === id);
+
+    if (update.action === "complete" || update.action === "cancel") {
+      if (existing) {
+        existing.status =
+          update.action === "complete" ? "completed" : "cancelled";
+        existing.updatedAtTurn = turn;
+      }
+      continue;
+    }
+
+    if (update.action !== "add") continue;
+
+    const title = safeText(update.title, 180);
+    const scheduledAt = safeIsoDate(update.scheduledAt);
+    const confidence = clamp01(update.confidence, 0);
+    if (!title || !scheduledAt || confidence < 0.65) continue;
+
+    const timestamp = Date.parse(scheduledAt);
+    if (
+      timestamp < now - 24 * 60 * 60 * 1_000 ||
+      timestamp > now + 2 * 365 * 24 * 60 * 60 * 1_000
+    ) {
+      continue;
+    }
+
+    if (existing) {
+      existing.title = title;
+      existing.scheduledAt = scheduledAt;
+      existing.status = "pending";
+      existing.confidence = confidence;
+      existing.updatedAtTurn = turn;
+      continue;
+    }
+
+    const duplicate = next.find(
+      item =>
+        item.status === "pending" &&
+        canonicalKey(item.title) === canonicalKey(title) &&
+        item.scheduledAt === scheduledAt,
+    );
+    if (duplicate) {
+      duplicate.confidence = Math.max(duplicate.confidence, confidence);
+      duplicate.updatedAtTurn = turn;
+      continue;
+    }
+
+    next.push({
+      id,
+      title,
+      scheduledAt,
+      status: "pending",
+      confidence,
+      sourceTurn: turn,
+      updatedAtTurn: turn,
+    });
+  }
+
+  return next
+    .sort(
+      (a, b) =>
+        Number(b.status === "pending") - Number(a.status === "pending") ||
+        Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt),
+    )
+    .slice(0, 24);
+}
+
 function applyStateDelta(
   previous: MayState,
   envelope: ModelEnvelope,
@@ -1575,6 +1891,12 @@ function applyStateDelta(
   next.people = applyPersonUpdates(next.people, envelope.personUpdates);
   next.emotionalMemories = applyMemoryUpdates(next, envelope.memoryUpdates);
   next.tastes = applyTasteUpdates(next.tastes, envelope.tasteUpdates);
+  next.facts = applyFactUpdates(next.facts, envelope.factUpdates, next.turn);
+  next.commitments = applyCommitmentUpdates(
+    next.commitments,
+    envelope.commitmentUpdates,
+    next.turn,
+  );
 
   const suggestedMood = safeMood(envelope.mood, next.mood);
 
@@ -1612,6 +1934,17 @@ function frontendMood(mood: Mood): "warm" | "happy" | "hurt" | "annoyed" {
 
 export async function POST(request: Request) {
   try {
+    const limit = checkRateLimit(request, "chat", 30);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { error: "Nhắn chậm lại một chút nha, hệ thống đang nhận quá nhiều tin." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(limit.retryAfter) },
+        },
+      );
+    }
+
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -1621,29 +1954,31 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json()) as {
-      messages?: IncomingMessage[];
-      state?: unknown;
-    };
-
-    const messages = Array.isArray(body.messages)
-      ? body.messages.slice(-36)
-      : [];
-
-    if (
-      !messages.length ||
-      messages.some(
-        message =>
-          !message?.text ||
-          !["ai", "user"].includes(message.role) ||
-          typeof message.text !== "string",
-      )
-    ) {
+    const contentLength = Number(request.headers.get("content-length") || 0);
+    if (contentLength > 250_000) {
       return NextResponse.json(
-        { error: "Nội dung trò chuyện không hợp lệ." },
-        { status: 400 },
+        { error: "Cuộc trò chuyện gửi lên quá lớn." },
+        { status: 413 },
       );
     }
+
+    const rawBody = await request.text();
+    const parsedBody = parseBoundedJson(rawBody, 250_000);
+    const validation = parsedBody.ok
+      ? chatRequestSchema.safeParse(parsedBody.value)
+      : null;
+
+    if (!validation?.success) {
+      const invalidStatus =
+        !parsedBody.ok && parsedBody.reason === "too_large" ? 413 : 400;
+      return NextResponse.json(
+        { error: "Nội dung trò chuyện không hợp lệ." },
+        { status: invalidStatus },
+      );
+    }
+
+    const body = validation.data;
+    const messages: IncomingMessage[] = body.messages;
 
     const previousState = decayState(sanitizeState(body.state));
 
@@ -1673,7 +2008,7 @@ export async function POST(request: Request) {
 
     const configuredFallbacks = (
       process.env.GEMINI_FALLBACK_MODELS ??
-      "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+      "gemini-3.5-flash,gemini-3.5-flash-lite"
     )
       .split(",")
       .map(value => value.trim())
@@ -1681,7 +2016,7 @@ export async function POST(request: Request) {
 
     const models = [
       ...new Set([
-        process.env.GEMINI_MODEL ?? "gemini-3.5-flash",
+        process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
         ...configuredFallbacks,
       ]),
     ];
@@ -1726,17 +2061,25 @@ ${turnDirection.prompt}`,
     let lastStatus = 502;
 
     for (const model of models) {
-      let response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            "x-goog-api-key": apiKey,
-          },
-          body: buildRequestBody(true),
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+      const requestOptions = (strictJson: boolean): RequestInit => ({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "x-goog-api-key": apiKey,
         },
-      );
+        body: buildRequestBody(strictJson),
+        signal: AbortSignal.timeout(35_000),
+      });
+
+      let response: Response;
+      try {
+        response = await fetch(endpoint, requestOptions(true));
+      } catch (error) {
+        lastStatus = 504;
+        console.error("Gemini request timed out or failed", model, error);
+        continue;
+      }
 
       /*
        * Một số model/fallback có thể không nhận responseMimeType.
@@ -1751,17 +2094,13 @@ ${turnDirection.prompt}`,
           firstDetail.slice(0, 300),
         );
 
-        response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json; charset=utf-8",
-              "x-goog-api-key": apiKey,
-            },
-            body: buildRequestBody(false),
-          },
-        );
+        try {
+          response = await fetch(endpoint, requestOptions(false));
+        } catch (error) {
+          lastStatus = 504;
+          console.error("Gemini compatibility retry failed", model, error);
+          continue;
+        }
       }
 
       lastStatus = response.status;
@@ -1769,6 +2108,7 @@ ${turnDirection.prompt}`,
       if (response.ok) {
         const data = (await response.json()) as {
           candidates?: Array<{
+            finishReason?: string;
             content?: {
               parts?: Array<{
                 text?: string;
@@ -1785,6 +2125,13 @@ ${turnDirection.prompt}`,
             .join("")
             .trim() ?? "";
 
+        if (data.candidates?.[0]?.finishReason === "MAX_TOKENS") {
+          console.error("Gemini response was truncated", model);
+          rawModelText = "";
+          lastStatus = 502;
+          continue;
+        }
+
         if (rawModelText) break;
       } else {
         const detail = await response.text();
@@ -1795,7 +2142,7 @@ ${turnDirection.prompt}`,
           detail.slice(0, 500),
         );
 
-        if (![429, 503].includes(response.status)) break;
+        if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
       }
     }
 
@@ -1825,9 +2172,22 @@ ${turnDirection.prompt}`,
       reply = cleanReply(envelope.reply);
       nextState = applyStateDelta(previousState, envelope);
     } else {
-      // Fail-safe: nếu model lỡ không trả JSON, vẫn cho chat tiếp nhưng KHÔNG
-      // tự ý thay đổi cảm xúc. Lượt sau model sẽ được nhắc lại contract.
-      reply = cleanReply(rawModelText);
+      const cleanedFallback = cleanReply(rawModelText);
+      const looksLikeBrokenEnvelope =
+        cleanedFallback.startsWith("{") ||
+        /"(?:reply|stateDelta|memoryUpdates)"\s*:/u.test(cleanedFallback);
+
+      // Không đẩy JSON hỏng hoặc object bị cắt ra giao diện như một tin nhắn.
+      if (looksLikeBrokenEnvelope) {
+        return NextResponse.json(
+          { error: "Mây Mây bị hụt mất câu, gửi lại giúp Mây nha." },
+          { status: 502 },
+        );
+      }
+
+      // Fallback chỉ dành cho model trả lời thuần văn bản. Không cho phép
+      // output sai schema tự ý đổi state/memory.
+      reply = cleanedFallback.slice(0, 6_000);
       nextState = {
         ...previousState,
         turn: previousState.turn + 1,

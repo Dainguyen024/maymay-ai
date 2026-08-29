@@ -2059,8 +2059,7 @@ ${turnDirection.prompt}`,
 
     let rawModelText = "";
     let lastStatus = 502;
-
-    for (const model of models) {
+for (const model of models) {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
       const requestOptions = (strictJson: boolean): RequestInit => ({
         method: "POST",
@@ -2069,7 +2068,7 @@ ${turnDirection.prompt}`,
           "x-goog-api-key": apiKey,
         },
         body: buildRequestBody(strictJson),
-        signal: AbortSignal.timeout(35_000),
+        signal: AbortSignal.timeout(15_000),
       });
 
       let response: Response;
@@ -2134,16 +2133,30 @@ ${turnDirection.prompt}`,
 
         if (rawModelText) break;
       } else {
-        const detail = await response.text();
-        console.error(
-          "Gemini request failed",
-          model,
-          response.status,
-          detail.slice(0, 500),
-        );
+  let detail = await response.text();
 
-        if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
-      }
+  console.error(
+    "Gemini request failed",
+    model,
+    response.status,
+    detail.slice(0, 500),
+  );
+
+  if (response.status === 429) {
+  console.warn(
+    `Gemini 429 on ${model} — switching to fallback immediately`,
+  );
+  continue;
+}
+
+  if (
+    ![408, 500, 502, 503, 504].includes(
+      response.status,
+    )
+  ) {
+    break;
+  }
+}
     }
 
     if (!rawModelText) {

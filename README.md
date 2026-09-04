@@ -9,7 +9,7 @@
 - Start Command: `npm start`
 - Environment variables:
   - `GEMINI_API_KEY`: khóa Gemini
-  - `GEMINI_MODEL`: mặc định `gemini-3.7-flash`
+  - `GEMINI_MODEL`: mặc định `gemini-3.8-flash`
   - `GEMINI_FALLBACK_MODELS`: tùy chọn, mặc định thử `gemini-3.5-flash,gemini-3.5-flash-lite` khi model chính quá tải/lỗi tạm thời
   - `FISH_AUDIO_API_KEY`: khóa API Fish Audio
   - `FISH_AUDIO_VOICE_ID`: ID giọng trong URL `fish.audio/m/<ID>`

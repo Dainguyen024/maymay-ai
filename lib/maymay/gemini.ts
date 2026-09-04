@@ -16,7 +16,7 @@ export async function callGeminiJson(args: {
     .split(",")
     .map(v => v.trim())
     .filter(Boolean);
-  const primary = (process.env.GEMINI_MODEL ?? "gemini-3.7-flash").trim();
+  const primary = (process.env.GEMINI_MODEL ?? "gemini-3.8-flash").trim();
   const models = [...new Set([primary, ...fallbacks])];
   let lastStatus = 500;
   let lastBody = "";
@@ -34,12 +34,13 @@ export async function callGeminiJson(args: {
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: args.systemPrompt }] },
             contents: args.contents,
-            generationConfig: {
-              temperature: args.temperature ?? 0.9,
-              topP: args.topP ?? 0.95,
-              maxOutputTokens: args.maxOutputTokens ?? 1400,
-              responseMimeType: "application/json",
-            },
+           generationConfig: {
+  thinkingConfig: {
+    thinkingLevel: "medium",
+  },
+  maxOutputTokens: args.maxOutputTokens ?? 1400,
+  responseMimeType: "application/json",
+},
           }),
         },
       );
